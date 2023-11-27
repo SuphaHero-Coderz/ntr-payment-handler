@@ -1,0 +1,10 @@
+fastapi
+pydantic
+uvicorn
+redis
+python-dotenv
+sqlalchemy
+psycopg2-binary
+python-multipart
+sqlmodel
+tenacity
