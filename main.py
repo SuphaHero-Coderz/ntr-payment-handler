@@ -101,6 +101,21 @@ def update_order_status(order_id: int, status: str, status_message: str):
     )
 
 
+def add_user_funds(user_id: int, num_credits: int):
+    """
+    Sends a request to increment user funds in backend
+
+    Args:
+        user_id (int): user id to add credits from
+        num_credits (int): amount to add
+    """
+    LOG.info(f"Adding {num_credits} credits to user {user_id}")
+    requests.put(
+        "http://backend/add-credits",
+        params={"user_id": user_id, "num_credits": num_credits},
+    )
+
+
 def deduct_user_funds(user_id: int, num_credits: int):
     """
     Sends a request to deduct user funds in backend
@@ -116,41 +131,55 @@ def deduct_user_funds(user_id: int, num_credits: int):
     )
 
 
+def rollback(order_id: int, user_id: int, num_tokens: int):
+    """
+    Rolls back changes made
+
+    Args:
+        order_id (int): order id
+        user_id (int): user id
+        num_tokens (int): number of tokens
+    """
+    LOG.warning(f"Rolling back for order id {order_id}")
+    create_payment(
+        order_id=order_id, user_id=user_id, num_tokens=-num_tokens, user_credits=777
+    )
+    add_user_funds(user_id, num_tokens)
+
+
 def process_message(data):
     """
     Processes an incoming message from the work queue
     """
     try:
-        order_id = data["order_id"]
-        user_id = data["user_id"]
-        num_tokens = data["num_tokens"]
-        user_credits = data["user_credits"]
+        if data["task"] == "rollback":
+            rollback(data["order_id"], data["user_id"], data["num_tokens"])
+        else:
+            order_id: int = data["order_id"]
+            user_id: int = data["user_id"]
+            num_tokens: int = data["num_tokens"]
+            user_credits: int = data["user_credits"]
 
-        create_payment(
-            order_id=order_id,
-            user_id=user_id,
-            num_tokens=num_tokens,
-            user_credits=user_credits,
-        )
+            create_payment(
+                order_id=order_id,
+                user_id=user_id,
+                num_tokens=num_tokens,
+                user_credits=user_credits,
+            )
 
-        # TODO ! Add error checking
-        deduct_user_funds(user_id=user_id, num_credits=num_tokens)
+            # TODO ! Add error checking
+            deduct_user_funds(user_id=user_id, num_credits=num_tokens)
 
-        update_order_status(
-            order_id=order_id, status="payment", status_message="Payment successful"
-        )
+            update_order_status(
+                order_id=order_id, status="payment", status_message="Payment successful"
+            )
 
-        LOG.info("Pushing to inventory queue")
-        RedisResource.push_to_queue(Queue.inventory_queue, data)
-    except InsufficientFundsError as err:
-        LOG.info("Insufficient funds. Updating status.")
-        update_order_status(order_id=order_id, status="failed", status_message=err)
+            LOG.info("Pushing to inventory queue")
+            RedisResource.push_to_queue(Queue.inventory_queue, data)
     except Exception as e:
         LOG.error("ERROR OCCURED! ", e.message)
         update_order_status(
-            order_id=order_id,
-            status="failed",
-            status_message="Error occurred in payment service",
+            order_id=order_id, status="failed", status_message=e.message
         )
 
 
