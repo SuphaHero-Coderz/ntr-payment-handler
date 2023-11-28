@@ -101,6 +101,21 @@ def update_order_status(order_id: int, status: str, status_message: str):
     )
 
 
+def deduct_user_funds(user_id: int, num_credits: int):
+    """
+    Sends a request to deduct user funds in backend
+
+    Args:
+        user_id (int): user id to deduct credits from
+        num_credits (int): amount to deduct
+    """
+    LOG.info(f"Deducting {num_credits} credits from user {user_id}")
+    requests.put(
+        "http://backend/deduct-credits",
+        params={"user_id": user_id, "num_credits": num_credits},
+    )
+
+
 def process_message(data):
     """
     Processes an incoming message from the work queue
@@ -117,6 +132,10 @@ def process_message(data):
             num_tokens=num_tokens,
             user_credits=user_credits,
         )
+
+        # TODO ! Add error checking
+        deduct_user_funds(user_id=user_id, num_credits=num_tokens)
+
         update_order_status(
             order_id=order_id, status="payment", status_message="Payment successful"
         )
