@@ -8,3 +8,4 @@ psycopg2-binary
 python-multipart
 sqlmodel
 tenacity
+requests
