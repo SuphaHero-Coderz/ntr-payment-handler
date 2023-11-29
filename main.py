@@ -59,14 +59,10 @@ def watch_queue(redis_conn, queue_name, callback_func, timeout=30):
                 data = {"status": -1, "message": "An error occurred"}
                 redis_conn.publish(PAYMENT_QUEUE_NAME, json.dumps(data))
             if task:
-                # get trace context from the task and create new span using the context
-                carrier = {"traceparent": task["traceparent"]}
-                ctx = TraceContextTextMapPropagator().extract(carrier)
-                with tracer.start_as_current_span("push to inventory", context=ctx):
-                    callback_func(task)
-                    print(task)
-                    data = {"status": 1, "message": "Successfully chunked video"}
-                    redis_conn.publish(PAYMENT_QUEUE_NAME, json.dumps(task))
+                callback_func(task)
+                print(task)
+                data = {"status": 1, "message": "Successfully chunked video"}
+                redis_conn.publish(PAYMENT_QUEUE_NAME, json.dumps(task))
 
 
 def create_payment(
@@ -168,31 +164,35 @@ def process_message(data):
         if data["task"] == "rollback":
             rollback(data["order_id"], data["user_id"], data["num_tokens"])
         else:
-            order_id: int = data["order_id"]
-            user_id: int = data["user_id"]
-            num_tokens: int = data["num_tokens"]
-            user_credits: int = data["user_credits"]
+            # get trace context from the task and create new span using the context
+            carrier = {"traceparent": data["traceparent"]}
+            ctx = TraceContextTextMapPropagator().extract(carrier)
+            with tracer.start_as_current_span("push to inventory", context=ctx):
+                order_id: int = data["order_id"]
+                user_id: int = data["user_id"]
+                num_tokens: int = data["num_tokens"]
+                user_credits: int = data["user_credits"]
 
-            create_payment(
-                order_id=order_id,
-                user_id=user_id,
-                num_tokens=num_tokens,
-                user_credits=user_credits,
-            )
+                create_payment(
+                    order_id=order_id,
+                    user_id=user_id,
+                    num_tokens=num_tokens,
+                    user_credits=user_credits,
+                )
 
-            # TODO ! Add error checking
-            deduct_user_funds(user_id=user_id, num_credits=num_tokens)
+                # TODO ! Add error checking
+                deduct_user_funds(user_id=user_id, num_credits=num_tokens)
 
-            update_order_status(
-                order_id=order_id, status="payment", status_message="Payment successful"
-            )
+                update_order_status(
+                    order_id=order_id, status="payment", status_message="Payment successful"
+                )
 
-            LOG.info("Pushing to inventory queue")
-            carrier = {}
-            #pass the current context to the next service
-            TraceContextTextMapPropagator().inject(carrier)
-            data["traceparent"] = carrier["traceparent"]
-            RedisResource.push_to_queue(Queue.inventory_queue, data)
+                LOG.info("Pushing to inventory queue")
+                carrier = {}
+                #pass the current context to the next service
+                TraceContextTextMapPropagator().inject(carrier)
+                data["traceparent"] = carrier["traceparent"]
+                RedisResource.push_to_queue(Queue.inventory_queue, data)
     except Exception as e:
         LOG.error("ERROR OCCURED! ", e.message)
         update_order_status(
