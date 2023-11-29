@@ -9,3 +9,5 @@ python-multipart
 sqlmodel
 tenacity
 requests
+opentelemetry-distro==0.38b0
+opentelemetry-exporter-otlp==1.17.0

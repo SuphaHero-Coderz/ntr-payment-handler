@@ -9,4 +9,5 @@ COPY . /app/
 WORKDIR /app
 
 # How to run it when we start up the box?
-CMD ["python", "main.py"]
+RUN opentelemetry-bootstrap --action=install
+CMD ["opentelemetry-instrument", "python", "main.py"]
