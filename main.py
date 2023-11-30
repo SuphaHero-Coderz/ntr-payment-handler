@@ -162,17 +162,20 @@ def process_message(data):
     """
     try:
         if data["task"] == "rollback":
-            rollback(data["order_id"], data["user_id"], data["num_tokens"])
-        else:
-            # get trace context from the task and create new span using the context
             carrier = {"traceparent": data["traceparent"]}
             ctx = TraceContextTextMapPropagator().extract(carrier)
-            with tracer.start_as_current_span("push to inventory", context=ctx):
-                order_id: int = data["order_id"]
-                user_id: int = data["user_id"]
-                num_tokens: int = data["num_tokens"]
-                user_credits: int = data["user_credits"]
+            with tracer.start_as_current_span("rollback payment", context=ctx):
+                rollback(data["order_id"], data["user_id"], data["num_tokens"])
+        else:
+            # get trace context from the task and create new span using the context
+            order_id: int = data["order_id"]
+            user_id: int = data["user_id"]
+            num_tokens: int = data["num_tokens"]
+            user_credits: int = data["user_credits"]
+            carrier = {"traceparent": data["traceparent"]}
+            ctx = TraceContextTextMapPropagator().extract(carrier)
 
+            with tracer.start_as_current_span("begin payment", context=ctx):
                 create_payment(
                     order_id=order_id,
                     user_id=user_id,
@@ -187,6 +190,7 @@ def process_message(data):
                     order_id=order_id, status="payment", status_message="Payment successful"
                 )
 
+            with tracer.start_as_current_span("push to inventory", context=ctx):
                 LOG.info("Pushing to inventory queue")
                 carrier = {}
                 #pass the current context to the next service
@@ -194,10 +198,13 @@ def process_message(data):
                 data["traceparent"] = carrier["traceparent"]
                 RedisResource.push_to_queue(Queue.inventory_queue, data)
     except Exception as e:
-        LOG.error("ERROR OCCURED! ", e.message)
-        update_order_status(
-            order_id=order_id, status="failed", status_message=e.message
-        )
+        carrier = {"traceparent": data["traceparent"]}
+        ctx = TraceContextTextMapPropagator().extract(carrier)
+        with tracer.start_as_current_span("failed payment", context=ctx):
+            LOG.error("ERROR OCCURED! ", e.message)
+            update_order_status(
+                order_id=order_id, status="failed", status_message=e.message
+            )
 
 
 def main():
