@@ -9,6 +9,13 @@ from src.models import Payment
 from src.redis import RedisResource, Queue
 from src.exceptions import InsufficientFundsError
 import src.db_services as _services
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+
+provider = TracerProvider()
+trace.set_tracer_provider(provider)
+tracer = trace.get_tracer(__name__)
 
 load_dotenv()
 
@@ -24,6 +31,7 @@ LOG.basicConfig(
 
 
 def watch_queue(redis_conn, queue_name, callback_func, timeout=30):
+
     """
     Listens to queue `queue_name` and passes messages to `callback_func`
     """
@@ -52,6 +60,7 @@ def watch_queue(redis_conn, queue_name, callback_func, timeout=30):
                 redis_conn.publish(PAYMENT_QUEUE_NAME, json.dumps(data))
             if task:
                 callback_func(task)
+                print(task)
                 data = {"status": 1, "message": "Successfully chunked video"}
                 redis_conn.publish(PAYMENT_QUEUE_NAME, json.dumps(task))
 
@@ -153,34 +162,49 @@ def process_message(data):
     """
     try:
         if data["task"] == "rollback":
-            rollback(data["order_id"], data["user_id"], data["num_tokens"])
+            carrier = {"traceparent": data["traceparent"]}
+            ctx = TraceContextTextMapPropagator().extract(carrier)
+            with tracer.start_as_current_span("rollback payment", context=ctx):
+                rollback(data["order_id"], data["user_id"], data["num_tokens"])
         else:
+            # get trace context from the task and create new span using the context
             order_id: int = data["order_id"]
             user_id: int = data["user_id"]
             num_tokens: int = data["num_tokens"]
             user_credits: int = data["user_credits"]
+            carrier = {"traceparent": data["traceparent"]}
+            ctx = TraceContextTextMapPropagator().extract(carrier)
 
-            create_payment(
-                order_id=order_id,
-                user_id=user_id,
-                num_tokens=num_tokens,
-                user_credits=user_credits,
-            )
+            with tracer.start_as_current_span("begin payment", context=ctx):
+                create_payment(
+                    order_id=order_id,
+                    user_id=user_id,
+                    num_tokens=num_tokens,
+                    user_credits=user_credits,
+                )
 
-            # TODO ! Add error checking
-            deduct_user_funds(user_id=user_id, num_credits=num_tokens)
+                # TODO ! Add error checking
+                deduct_user_funds(user_id=user_id, num_credits=num_tokens)
 
-            update_order_status(
-                order_id=order_id, status="payment", status_message="Payment successful"
-            )
+                update_order_status(
+                    order_id=order_id, status="payment", status_message="Payment successful"
+                )
 
-            LOG.info("Pushing to inventory queue")
-            RedisResource.push_to_queue(Queue.inventory_queue, data)
+            with tracer.start_as_current_span("push to inventory", context=ctx):
+                LOG.info("Pushing to inventory queue")
+                carrier = {}
+                #pass the current context to the next service
+                TraceContextTextMapPropagator().inject(carrier)
+                data["traceparent"] = carrier["traceparent"]
+                RedisResource.push_to_queue(Queue.inventory_queue, data)
     except Exception as e:
-        LOG.error("ERROR OCCURED! ", e.message)
-        update_order_status(
-            order_id=order_id, status="failed", status_message=e.message
-        )
+        carrier = {"traceparent": data["traceparent"]}
+        ctx = TraceContextTextMapPropagator().extract(carrier)
+        with tracer.start_as_current_span("failed payment", context=ctx):
+            LOG.error("ERROR OCCURED! ", e.message)
+            update_order_status(
+                order_id=order_id, status="failed", status_message=e.message
+            )
 
 
 def main():
