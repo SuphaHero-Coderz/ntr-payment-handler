@@ -11,7 +11,7 @@ DATABASE_DB = os.getenv("DATABASE_DB")
 DATABASE_PORT = os.getenv("DATABASE_PORT")
 
 DATABASE_URL = (
-    f"postgresql://{DATABASE_USER}:{DATABASE_PASSWORD}@db_postgres:"
+    f"postgresql://{DATABASE_USER}:{DATABASE_PASSWORD}@postgres:"
     f"{DATABASE_PORT}/{DATABASE_DB}"
 )
 
