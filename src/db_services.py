@@ -49,6 +49,9 @@ def get_payment(order_id: int, user_id: int) -> Payment:
         query = select(Payment).where(
             Payment.order_id == order_id, Payment.user_id == user_id
         )
-        result = session.exec(query).one()
+        try:
+            result = session.exec(query).one()
+        except:
+            result = None
 
         return result

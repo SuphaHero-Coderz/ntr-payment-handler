@@ -7,7 +7,7 @@ import requests
 from dotenv import load_dotenv
 from src.models import Payment
 from src.redis import RedisResource, Queue
-from src.exceptions import InsufficientFundsError
+from src.exceptions import InsufficientFundsError, ForcedFailureError
 import src.db_services as _services
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from opentelemetry import trace
@@ -31,7 +31,6 @@ LOG.basicConfig(
 
 
 def watch_queue(redis_conn, queue_name, callback_func, timeout=30):
-
     """
     Listens to queue `queue_name` and passes messages to `callback_func`
     """
@@ -149,11 +148,12 @@ def rollback(order_id: int, user_id: int, num_tokens: int):
         user_id (int): user id
         num_tokens (int): number of tokens
     """
-    LOG.warning(f"Rolling back for order id {order_id}")
-    create_payment(
-        order_id=order_id, user_id=user_id, num_tokens=-num_tokens, user_credits=777
-    )
-    add_user_funds(user_id, num_tokens)
+    if _services.get_payment(order_id=order_id, user_id=user_id):
+        LOG.warning(f"Rolling back for order id {order_id}")
+        create_payment(
+            order_id=order_id, user_id=user_id, num_tokens=-num_tokens, user_credits=777
+        )
+        add_user_funds(user_id, num_tokens)
 
 
 def process_message(data):
@@ -172,10 +172,14 @@ def process_message(data):
             user_id: int = data["user_id"]
             num_tokens: int = data["num_tokens"]
             user_credits: int = data["user_credits"]
+            payment_fail: bool = data["payment_fail"]
             carrier = {"traceparent": data["traceparent"]}
             ctx = TraceContextTextMapPropagator().extract(carrier)
 
             with tracer.start_as_current_span("begin payment", context=ctx):
+                if payment_fail:
+                    raise ForcedFailureError
+
                 create_payment(
                     order_id=order_id,
                     user_id=user_id,
@@ -183,17 +187,18 @@ def process_message(data):
                     user_credits=user_credits,
                 )
 
-                # TODO ! Add error checking
                 deduct_user_funds(user_id=user_id, num_credits=num_tokens)
 
                 update_order_status(
-                    order_id=order_id, status="payment", status_message="Payment successful"
+                    order_id=order_id,
+                    status="payment",
+                    status_message="Payment successful",
                 )
 
             with tracer.start_as_current_span("push to inventory", context=ctx):
                 LOG.info("Pushing to inventory queue")
                 carrier = {}
-                #pass the current context to the next service
+                # pass the current context to the next service
                 TraceContextTextMapPropagator().inject(carrier)
                 data["traceparent"] = carrier["traceparent"]
                 RedisResource.push_to_queue(Queue.inventory_queue, data)
@@ -202,6 +207,7 @@ def process_message(data):
         ctx = TraceContextTextMapPropagator().extract(carrier)
         with tracer.start_as_current_span("failed payment", context=ctx):
             LOG.error("ERROR OCCURED! ", e.message)
+            rollback(order_id, user_id, num_tokens)
             update_order_status(
                 order_id=order_id, status="failed", status_message=e.message
             )
