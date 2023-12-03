@@ -13,8 +13,6 @@ from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapProp
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 
-provider = TracerProvider()
-trace.set_tracer_provider(provider)
 tracer = trace.get_tracer(__name__)
 
 load_dotenv()
@@ -24,10 +22,6 @@ PAYMENT_QUEUE_NAME = os.getenv("PAYMENT_QUEUE_NAME")
 
 QUEUE_NAME = f"queue:{PAYMENT_QUEUE_NAME}"
 INSTANCE_NAME = uuid.uuid4().hex
-
-LOG.basicConfig(
-    level=LOG.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
 
 
 def watch_queue(redis_conn, queue_name, callback_func, timeout=30):
@@ -157,6 +151,7 @@ def rollback(order_id: int, user_id: int, num_tokens: int):
 
 
 def process_message(data):
+    LOG.info("begin payment")
     """
     Processes an incoming message from the work queue
     """
@@ -202,6 +197,7 @@ def process_message(data):
                 TraceContextTextMapPropagator().inject(carrier)
                 data["traceparent"] = carrier["traceparent"]
                 RedisResource.push_to_queue(Queue.inventory_queue, data)
+                LOG.info("finish payment")
     except Exception as e:
         carrier = {"traceparent": data["traceparent"]}
         ctx = TraceContextTextMapPropagator().extract(carrier)
